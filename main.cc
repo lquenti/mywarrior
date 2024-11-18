@@ -8,6 +8,8 @@
 #include <string>
 #include <thread>
 
+#include "json.hpp"
+
 bool stop{false};
 
 template <typename ...Args>
@@ -38,6 +40,14 @@ std::string format_seconds(T total_seconds) {
     oss << std::setw(2) << std::setfill('0') << mins << ":";
   }
   oss << std::setw(2) << std::setfill('0') << secs;
+  return oss.str();
+}
+
+template <typename Clock>
+std::string timepoint_to_iso(const typename Clock::time_point &tp) {
+  auto tt{Clock::to_time_t(tp)};
+  std::ostringstream oss;
+  oss << std::put_time(std::localtime(&tt), "%Y-%m-%dT%H:%M:%S");
   return oss.str();
 }
 
@@ -86,4 +96,9 @@ int main(int argc, char **argv) {
   auto delta{std::chrono::duration_cast<std::chrono::seconds>(end-start)};
   std::cout << "Successfully worked for " << delta.count() << " seconds!" 
     << std::endl;
+  auto json = nlohmann::json{
+    {"start", timepoint_to_iso<std::chrono::system_clock>(start)},
+    {"end", timepoint_to_iso<std::chrono::system_clock>(end)},
+  };
+  debug_print(json.dump());
 }
