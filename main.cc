@@ -2,6 +2,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -11,6 +12,8 @@
 #include "json.hpp"
 
 bool stop{false};
+
+const std::string TRACK_FILE{"mywarrior.ndjson"};
 
 template <typename ...Args>
 void debug_print(Args &&...args) {
@@ -96,9 +99,15 @@ int main(int argc, char **argv) {
   auto delta{std::chrono::duration_cast<std::chrono::seconds>(end-start)};
   std::cout << "Successfully worked for " << delta.count() << " seconds!" 
     << std::endl;
+
   auto json = nlohmann::json{
     {"start", timepoint_to_iso<std::chrono::system_clock>(start)},
-    {"end", timepoint_to_iso<std::chrono::system_clock>(end)},
+    {"end", timepoint_to_iso<std::chrono::system_clock>(end)}
   };
-  debug_print(json.dump());
+  auto json_str{json.dump()};
+  debug_print(json_str);
+  std::ofstream ofs(TRACK_FILE, std::ios_base::app);
+  ofs << json_str << std::endl;
+  ofs.close();
+  debug_print("end");
 }
