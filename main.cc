@@ -11,7 +11,11 @@
 
 #include "json.hpp"
 
+// stop == stopped by SIGINT or end of timer
+// user_ended == newline
+// (in case the user continues to work)
 bool stop{false};
+bool user_ended{false};
 
 const std::string TRACK_FILE{"mywarrior.ndjson"};
 
@@ -54,6 +58,18 @@ std::string timepoint_to_iso(const typename Clock::time_point &tp) {
   return oss.str();
 }
 
+/* TODO replace me with SDL */
+void play_sound() {
+  system("play -nq -t alsa synth 0.5 sine 440");
+}
+
+void remind_user_to_end() {
+  while (!user_ended) {
+    play_sound();
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+  }
+}
+
 void timer(std::uint64_t seconds) {
   for (std::uint64_t i{seconds}; i; --i) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -62,11 +78,16 @@ void timer(std::uint64_t seconds) {
     }
     std::cout << format_seconds(i) << std::endl;
   }
+  if (!user_ended) {
+    std::thread sound_thread(remind_user_to_end);
+    sound_thread.detach();
+  }
 }
 
 void signal_handler(int signal) {
   if (signal == SIGINT) {
     stop = true;
+    user_ended = true;
   }
   std::cout << std::endl << "Press enter to exit!" << std::endl;
 }
@@ -83,7 +104,8 @@ int main(int argc, char **argv) {
   };
   debug_print("Pomodoro count: ", pomodoro_count);
 
-  std::uint64_t total_seconds{pomodoro_count*60*25};
+  //std::uint64_t total_seconds{pomodoro_count*60*25};
+  std::uint64_t total_seconds{3};
   debug_print("Total seconds: ", total_seconds);
   std::cout << "Enter to stop early" << std::endl;
 
@@ -93,6 +115,7 @@ int main(int argc, char **argv) {
   std::string buf{};
   std::getline(std::cin, buf);
   stop=true;
+  user_ended=true;
 
   thread.join();
   auto end{std::chrono::system_clock::now()};
