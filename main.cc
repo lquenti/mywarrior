@@ -23,6 +23,12 @@ const std::string TRACK_FILE{"mywarrior.ndjson"};
 template <typename ...Args>
 void debug_print(Args &&...args) {
 #ifndef NDEBUG
+  auto now{std::chrono::system_clock::now()};
+  auto now_tt{std::chrono::system_clock::to_time_t(now)};
+  std::cerr << "[DEBUG " 
+    << std::put_time(std::localtime(&now_tt), "%Y-%m-%d %H:%M:%S")
+    << "] ";
+
   /* Expands to
    * ((cerr << arg1 << " "), (cerr << arg2 << " "))
    * Standard insures the evaluation order
