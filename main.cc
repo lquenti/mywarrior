@@ -7,16 +7,15 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <thread>
+
+namespace nc {
+  #include <ncurses.h>
+};
 
 #include "argparse.hpp"
 #include "json.hpp"
 
-// stop == stopped by SIGINT or end of timer
-// user_ended == newline
-// (in case the user continues to work)
-bool stop{false};
-bool user_ended{false};
+bool sigint_recieved{false};
 
 const std::string TRACK_FILE{"mywarrior.ndjson"};
 
@@ -25,15 +24,9 @@ void debug_print(Args &&...args) {
 #ifndef NDEBUG
   auto now{std::chrono::system_clock::now()};
   auto now_tt{std::chrono::system_clock::to_time_t(now)};
-  std::cerr << "[DEBUG " 
+  std::cerr << "[DEBUG "
     << std::put_time(std::localtime(&now_tt), "%Y-%m-%d %H:%M:%S")
     << "] ";
-
-  /* Expands to
-   * ((cerr << arg1 << " "), (cerr << arg2 << " "))
-   * Standard insures the evaluation order
-   * https://en.cppreference.com/w/cpp/language/operator_other#Built-in_comma_operator
-   */
   ((std::cerr << std::forward<Args>(args) << " " ), ...);
   std::cerr << std::endl;
 #else
@@ -41,10 +34,10 @@ void debug_print(Args &&...args) {
 #endif
 }
 
-template <typename T>
-std::string format_seconds(T total_seconds) {
-  T hours{total_seconds/3600}, 
-    mins{(total_seconds%3600)/60}, 
+template <typename Num>
+std::string format_seconds(Num total_seconds) {
+  Num hours{total_seconds/3600},
+    mins{(total_seconds%3600)/60},
     secs{total_seconds%60};
   std::ostringstream oss{};
   if (hours) {
@@ -65,38 +58,21 @@ std::string timepoint_to_iso(const typename Clock::time_point &tp) {
   return oss.str();
 }
 
-/* TODO replace me with SDL */
+/* TODO replace me with SDL or sth serious */
 void play_sound() {
-  system("play -nq -t alsa synth 0.5 sine 440");
-}
-
-void remind_user_to_end() {
-  while (!user_ended) {
-    play_sound();
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-  }
-}
-
-void timer(std::uint64_t seconds) {
-  for (std::uint64_t i{seconds}; i; --i) {
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    if (stop) {
-      break;
-    }
-    std::cout << format_seconds(i) << std::endl;
-  }
-  if (!user_ended) {
-    std::thread sound_thread(remind_user_to_end);
-    sound_thread.detach();
-  }
+  system("play -nq -t alsa synth 0.5 sine 440 vol 0.5");
 }
 
 void signal_handler(int signal) {
   if (signal == SIGINT) {
-    stop = true;
-    user_ended = true;
+    sigint_recieved = true;
   }
-  std::cout << std::endl << "Press enter to exit!" << std::endl;
+}
+
+std::uint64_t seconds_since(const std::chrono::system_clock::time_point &tp) {
+  return std::chrono::duration_cast<std::chrono::seconds>(
+    std::chrono::system_clock::now() - tp
+  ).count();
 }
 
 int track_main(std::uint64_t pomodoro_count) {
@@ -107,18 +83,57 @@ int track_main(std::uint64_t pomodoro_count) {
   debug_print("Total seconds: ", total_seconds);
   std::cout << "Enter to stop early" << std::endl;
 
+
+  // TODO refactor out
+  // init ncurses
+  nc::initscr();
+  // Don't echo keyboard input
+  nc::noecho();
+  // Read input on a character basis
+  nc::cbreak();
+  // hide cursor
+  nc::curs_set(0);
+  // Make getch non blocking
+  nc::nodelay(nc::stdscr, TRUE);
+
+  int input{1337};
+  uint64_t secs;
   auto start{std::chrono::system_clock::now()};
-  std::thread thread(timer, total_seconds);
+  while (!(input == '\n' || input == 'q' || sigint_recieved)) {
+    secs = seconds_since(start);
+    // clear screen
+    nc::clear();
+    std::stringstream first_line;
+    if (secs < total_seconds) {
+      first_line << "Time remaining: " << format_seconds(total_seconds-secs);
+    } else {
+      first_line << "Time over since " << format_seconds(secs-total_seconds);
+    }
+    nc::mvprintw(0, 0, "%s", first_line.str().c_str());
+    nc::mvprintw(2, 0, "q or enter to stop timer");
+    nc::mvprintw(3, 0, "Debug: Last Input '%d'", input);
+    // refresh (and flush out) the screen
+    nc::refresh();
+    // sleep for .5 second
+    nc::napms(500);
+    // equal to getch(), but without macros
+    input = nc::wgetch(nc::stdscr);
+    if (input == '\n' || input == 'q') {
+      break;
+    }
 
-  std::string buf{};
-  std::getline(std::cin, buf);
-  stop=true;
-  user_ended=true;
+    // notify the user every 10 seconds if time is already up
+    if (secs >= total_seconds && ((secs-total_seconds)%10)==0) {
+      play_sound();
+    }
+  }
 
-  thread.join();
+  // Clean up ncurses
+  nc::endwin();
+
   auto end{std::chrono::system_clock::now()};
   auto delta{std::chrono::duration_cast<std::chrono::seconds>(end-start)};
-  std::cout << "Successfully worked for " << delta.count() << " seconds!" 
+  std::cout << "Successfully worked for " << delta.count() << " seconds!"
     << std::endl;
 
   auto json = nlohmann::json{
@@ -135,7 +150,13 @@ int track_main(std::uint64_t pomodoro_count) {
 }
 
 void report_main() {
-  std::cout << "to be implemented..." << std::endl;
+  std::vector<nlohmann::json> xs;
+  std::ifstream ifs(TRACK_FILE);
+  std::string buf;
+  while (std::getline(ifs, buf)) {
+    xs.emplace_back(nlohmann::json::parse(buf));
+  }
+  // TODO continue here
 }
 
 int main(int argc, char **argv) {
