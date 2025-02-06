@@ -1,3 +1,4 @@
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -75,16 +76,7 @@ std::uint64_t seconds_since(const std::chrono::system_clock::time_point &tp) {
   ).count();
 }
 
-int track_main(std::uint64_t pomodoro_count) {
-  std::signal(SIGINT, signal_handler);
-  debug_print("Pomodoro count: ", pomodoro_count);
-
-  std::uint64_t total_seconds{pomodoro_count*60*25};
-  debug_print("Total seconds: ", total_seconds);
-  std::cout << "Enter to stop early" << std::endl;
-
-
-  // TODO refactor out
+void init_nc() {
   // init ncurses
   nc::initscr();
   // Don't echo keyboard input
@@ -95,47 +87,11 @@ int track_main(std::uint64_t pomodoro_count) {
   nc::curs_set(0);
   // Make getch non blocking
   nc::nodelay(nc::stdscr, TRUE);
+}
 
-  int input{1337};
-  uint64_t secs;
-  auto start{std::chrono::system_clock::now()};
-  while (!(input == '\n' || input == 'q' || sigint_recieved)) {
-    secs = seconds_since(start);
-    // clear screen
-    nc::clear();
-    std::stringstream first_line;
-    if (secs < total_seconds) {
-      first_line << "Time remaining: " << format_seconds(total_seconds-secs);
-    } else {
-      first_line << "Time over since " << format_seconds(secs-total_seconds);
-    }
-    nc::mvprintw(0, 0, "%s", first_line.str().c_str());
-    nc::mvprintw(2, 0, "q or enter to stop timer");
-    nc::mvprintw(3, 0, "Debug: Last Input '%d'", input);
-    // refresh (and flush out) the screen
-    nc::refresh();
-    // sleep for .5 second
-    nc::napms(500);
-    // equal to getch(), but without macros
-    input = nc::wgetch(nc::stdscr);
-    if (input == '\n' || input == 'q') {
-      break;
-    }
-
-    // notify the user every 10 seconds if time is already up
-    if (secs >= total_seconds && ((secs-total_seconds)%10)==0) {
-      play_sound();
-    }
-  }
-
-  // Clean up ncurses
-  nc::endwin();
-
-  auto end{std::chrono::system_clock::now()};
-  auto delta{std::chrono::duration_cast<std::chrono::seconds>(end-start)};
-  std::cout << "Successfully worked for " << delta.count() << " seconds!"
-    << std::endl;
-
+void write_out_ndjson(
+    const std::chrono::system_clock::time_point &start,
+    const std::chrono::system_clock::time_point &end) {
   auto json = nlohmann::json{
     {"start", timepoint_to_iso<std::chrono::system_clock>(start)},
     {"end", timepoint_to_iso<std::chrono::system_clock>(end)}
@@ -145,8 +101,60 @@ int track_main(std::uint64_t pomodoro_count) {
   std::ofstream ofs(TRACK_FILE, std::ios_base::app);
   ofs << json_str << std::endl;
   ofs.close();
-  debug_print("end");
-  return EXIT_SUCCESS;
+}
+
+void track_main(std::uint64_t pomodoro_count) {
+  std::signal(SIGINT, signal_handler);
+  debug_print("Pomodoro count: ", pomodoro_count);
+
+  std::uint64_t total_seconds{pomodoro_count*60*25};
+  debug_print("Total seconds: ", total_seconds);
+  std::cout << "Enter to stop early" << std::endl;
+
+  init_nc();
+
+  int input{1337};
+  uint64_t secs;
+  auto start{std::chrono::system_clock::now()};
+  while (!(input == '\n' || input == 'q' || sigint_recieved)) {
+    secs = seconds_since(start);
+
+    // clear screen
+    nc::clear();
+    std::stringstream first_line;
+    bool time_is_up = secs >= total_seconds;
+    if (time_is_up) {
+      first_line << "Time over since " << format_seconds(secs-total_seconds);
+    } else {
+      first_line << "Time remaining: " << format_seconds(total_seconds-secs);
+    }
+    nc::mvprintw(0, 0, "%s", first_line.str().c_str());
+    nc::mvprintw(2, 0, "q or enter to stop timer");
+    nc::mvprintw(3, 0, "Debug: Last Input '%d'", input);
+    nc::refresh(); // refresh includes "flush out"
+    nc::napms(500); // sleep
+
+    // equal to getch(), but without macros
+    input = nc::wgetch(nc::stdscr);
+    if (input == '\n' || input == 'q') {
+      break;
+    }
+
+    // if time is already up: notify the user every 10 seconds
+    if (time_is_up && ((secs-total_seconds)%10)==0) {
+      play_sound();
+    }
+  }
+
+  nc::endwin();
+
+  auto end{std::chrono::system_clock::now()};
+  auto delta{std::chrono::duration_cast<std::chrono::seconds>(end-start)};
+  std::cout << "Successfully worked for " << delta.count() << " seconds!"
+    << std::endl;
+
+  write_out_ndjson(start, end);
+  debug_print("end track");
 }
 
 void report_main() {
@@ -157,6 +165,73 @@ void report_main() {
     xs.emplace_back(nlohmann::json::parse(buf));
   }
   // TODO continue here
+}
+
+std::string get_current_date_string() {
+  auto now = std::chrono::system_clock::now();
+  std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+  std::tm local_tm = *std::localtime(&now_c);
+  std::ostringstream date_stream;
+  date_stream << std::put_time(&local_tm, "%Y-%m-%d");
+  return date_stream.str();
+}
+
+// Assuming
+// YYYY-mm-dd and hh-mm
+// NOTICE NO SECONDS
+std::chrono::system_clock::time_point parse_datetime(const std::string& date_str,
+    const std::string& time_str) {
+    std::tm tm = {};
+    std::istringstream ss(date_str + " " + time_str);
+    ss >> std::get_time(&tm, "%Y-%m-%d %H:%M");
+    auto tp = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+    return tp;
+}
+
+
+void add_main() {
+  // was it today
+  std::string buf;
+  std::cout << "Was it today? (y/n)" << std::endl;
+  std::getline(std::cin, buf); // used to get rid of newline
+  bool was_it_today;
+  char answer = std::tolower(buf[0]);
+  if (answer == 'y') {
+    was_it_today = true;
+  } else if (answer == 'n') {
+    was_it_today = false;
+  } else {
+    was_it_today = false;
+    std::cout << "Not understood... I am assuming it was today" << std::endl;
+  }
+
+  std::string start_date, end_date, start_time, end_time;
+
+  // get start and end date
+  if (!was_it_today) {
+    // TODO make it run iteratively if it does not fit the format
+    std::cout << "Enter start date (YYYY-mm-dd): ";
+    std::getline(std::cin, start_date);
+    std::cout << "Enter end date (YYYY-mm-dd): ";
+    std::getline(std::cin, end_date);
+  } else {
+    // Automatically set today's date
+    start_date = end_date = get_current_date_string();
+  }
+  debug_print("Start Date ", start_date);
+  debug_print("End Date ", end_date);
+
+  // get start and end time
+  // TODO make it run iteratively if it does not fit the format
+  std::cout << "Enter start time (hh:mm): ";
+  std::getline(std::cin, start_time);
+  std::cout << "Enter end time (hh:mm): ";
+  std::getline(std::cin, end_time);
+
+  // write out
+  auto start_tp = parse_datetime(start_date, start_time);
+  auto end_tp = parse_datetime(end_date, end_time);
+  write_out_ndjson(start_tp, end_tp);
 }
 
 int main(int argc, char **argv) {
@@ -171,8 +246,12 @@ int main(int argc, char **argv) {
   argparse::ArgumentParser report_command("report");
   report_command.add_description("provides report of recent work");
 
+  argparse::ArgumentParser add_command("add");
+  add_command.add_description("Add manually tracked time");
+
   program.add_subparser(track_command);
   program.add_subparser(report_command);
+  program.add_subparser(add_command);
 
   try {
     program.parse_args(argc, argv);
@@ -191,6 +270,9 @@ int main(int argc, char **argv) {
     debug_print("Starting Report");
     report_main();
     return EXIT_SUCCESS;
+  } else if (program.is_subcommand_used("add")) {
+    debug_print("Starting Add");
+    add_main();
   } else {
     std::cerr << program << std::endl;
     return EXIT_FAILURE;
