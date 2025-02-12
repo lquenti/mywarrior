@@ -188,6 +188,17 @@ std::chrono::system_clock::time_point parse_datetime(const std::string& date_str
     return tp;
 }
 
+// Assuming yyyy-mm-dd
+bool validate_date(std::string maybe_date) {
+  // allow for left_whitespace
+  size_t left_idx{0};
+  while (left_idx < maybe_date.size() && std::isspace(maybe_date[left_idx])) {
+    left_idx++;
+  }
+  // TODO continue, also check that nothing is afterwards
+  return false;
+}
+
 
 void add_main() {
   // was it today
